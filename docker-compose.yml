@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus_password
+      POSTGRES_DB: nexus_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus -d nexus_data"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://nexus:nexus_password@db:5432/nexus_data
+      - SECRET_KEY=supersecretkey
+      - JWT_SECRET=superjwtsecret
+      - AI_API_KEY=${AI_API_KEY}
+      - AI_BASE_URL=${AI_BASE_URL}
+      - AI_MODEL=${AI_MODEL:-gpt-4o-mini}
+      - WORKER_INLINE=true
+      - CORS_ORIGINS=*
+      - STORAGE_PATH=/app/storage
+      - CACHE_PATH=/app/cache
+      - EXPORT_PATH=/app/exports
+    volumes:
+      - ./backend:/app
+      - backend_storage:/app/storage
+      - backend_cache:/app/cache
+      - backend_exports:/app/exports
+    depends_on:
+      db:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    command: npm run dev -- --host 0.0.0.0
+
+  worker:
+    build:
+      context: ./backend
+    environment:
+      - DATABASE_URL=postgresql://nexus:nexus_password@db:5432/nexus_data
+      - SECRET_KEY=supersecretkey
+      - STORAGE_PATH=/app/storage
+      - CACHE_PATH=/app/cache
+      - EXPORT_PATH=/app/exports
+    volumes:
+      - ./backend:/app
+      - backend_storage:/app/storage
+      - backend_cache:/app/cache
+      - backend_exports:/app/exports
+    depends_on:
+      db:
+        condition: service_healthy
+    command: python -m app.workers.worker_runner --poll 2.0
+
+volumes:
+  postgres_data:
+  backend_storage:
+  backend_cache:
+  backend_exports:
